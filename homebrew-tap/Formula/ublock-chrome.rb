@@ -12,21 +12,13 @@ class UblockChrome < Formula
     bin.install "bin/ublock-chrome"
   end
 
-  def post_install
-    system "#{bin}/ublock-chrome", "install"
-  end
-
   def caveats
     <<~EOS
-      To set up uBlock Origin on Chrome:
+      Run this to finish setup:
 
         ublock-chrome install
 
-      This downloads uBlock Origin and creates a "Chrome (uBO)" launcher
-      app in ~/Applications/ that auto-loads the extension.
-
-      Always launch Chrome via "Chrome (uBO)" (or `ublock-chrome launch`)
-      so the ad-blocking flags stay active.
+      Then quit Chrome and open "Chrome (uBO)" from ~/Applications/.
 
       Other commands:
         ublock-chrome update      # grab latest uBlock Origin
