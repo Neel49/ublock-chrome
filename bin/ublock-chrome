@@ -3,8 +3,8 @@
 # ublock-chrome — One-command uBlock Origin installer for Chrome (macOS)
 #
 # Downloads the latest uBlock Origin, creates a "Chrome (uBO)"
-# launcher app that starts Chrome with MV2 flags, and guides you
-# through a one-time "Load unpacked" step for the extension.
+# launcher app that starts Chrome with MV2 flags + auto-loads
+# the extension. No manual chrome://extensions fiddling needed.
 #
 # Usage:
 #   ublock-chrome install     # full install (default)
@@ -31,7 +31,6 @@ _bold()  { printf '\033[1m%s\033[0m' "$*"; }
 _green() { printf '\033[1;32m%s\033[0m' "$*"; }
 _red()   { printf '\033[1;31m%s\033[0m' "$*"; }
 _dim()   { printf '\033[2m%s\033[0m' "$*"; }
-_cyan()  { printf '\033[1;36m%s\033[0m' "$*"; }
 
 _header() {
     echo ""
@@ -144,14 +143,11 @@ create_launcher_app() {
     mkdir -p "$macos_dir" "$resources"
 
     # ---- Launcher script ----
-    # NOTE: We only use MV2 flags here (not --load-extension) because
-    # enterprise-managed Chrome blocks --load-extension. The extension
-    # is loaded once via "Load unpacked" in chrome://extensions and
-    # persists across restarts.
     cat > "$macos_dir/launch.sh" << 'LAUNCHER_EOF'
 #!/bin/bash
 CHROME_APP="PLACEHOLDER_CHROME"
 MV2_FLAGS="PLACEHOLDER_FLAGS"
+EXT_PATH="PLACEHOLDER_EXT"
 
 if pgrep -x "Google Chrome" > /dev/null 2>&1; then
     CHOICE=$(osascript -e '
@@ -178,12 +174,13 @@ if pgrep -x "Google Chrome" > /dev/null 2>&1; then
     fi
 fi
 
-open -a "$CHROME_APP" --args $MV2_FLAGS
+open -a "$CHROME_APP" --args $MV2_FLAGS --load-extension="$EXT_PATH"
 LAUNCHER_EOF
 
     # Fill in placeholders
     sed -i '' "s|PLACEHOLDER_CHROME|$CHROME_APP|g" "$macos_dir/launch.sh"
     sed -i '' "s|PLACEHOLDER_FLAGS|$MV2_FLAGS|g" "$macos_dir/launch.sh"
+    sed -i '' "s|PLACEHOLDER_EXT|$EXTENSION_DIR|g" "$macos_dir/launch.sh"
     chmod +x "$macos_dir/launch.sh"
 
     # ---- Info.plist ----
@@ -261,28 +258,20 @@ cmd_install() {
     _step 3 "Creating 'Chrome (uBO)' launcher app..."
     create_launcher_app
 
-    # Copy extension path to clipboard for easy pasting
-    echo "$EXTENSION_DIR" | pbcopy 2>/dev/null || true
-
     echo ""
     echo "  --------------------------------------------------"
-    echo "  $(_green "Almost done!") One-time manual step needed:"
+    echo "  $(_green "Done!") Here's what to do next:"
     echo "  --------------------------------------------------"
     echo ""
-    echo "  1. Quit Chrome completely              (Cmd + Q)"
-    echo "  2. Open $(_bold "Chrome (uBO)") from ~/Applications/"
+    echo "  1. Quit Chrome completely         (Cmd + Q)"
+    echo "  2. Open 'Chrome (uBO)' from:      ~/Applications/"
     echo "     Or run:  ublock-chrome launch"
-    echo "  3. Go to $(_cyan "chrome://extensions")"
-    echo "  4. Make sure $(_bold "Developer mode") is ON (top-right toggle)"
-    echo "  5. Click $(_bold "Load unpacked")"
-    echo "  6. Paste this path (already copied to clipboard):"
-    echo ""
-    echo "     $(_cyan "$EXTENSION_DIR")"
-    echo ""
-    echo "  That's it — uBlock Origin will persist across restarts"
-    echo "  as long as you always open Chrome via 'Chrome (uBO)'."
     echo ""
     echo "  Tip: Right-click the Dock icon → Options → Keep in Dock"
+    echo ""
+    echo "  The launcher automatically:"
+    echo "    • Enables Manifest V2 extensions"
+    echo "    • Loads uBlock Origin into Chrome"
     echo ""
     echo "  Other commands:"
     echo "    ublock-chrome update      Re-download latest uBlock Origin"
@@ -344,10 +333,10 @@ cmd_launch() {
         exit 1
     fi
 
-    echo "  Restarting Chrome with MV2 flags..."
+    echo "  Restarting Chrome with uBlock Origin..."
     quit_chrome
-    open -a "$CHROME_APP" --args $MV2_FLAGS
-    echo "  $(_green "Chrome launched with Manifest V2 support enabled.")"
+    open -a "$CHROME_APP" --args $MV2_FLAGS --load-extension="$EXTENSION_DIR"
+    echo "  $(_green "Chrome launched with uBlock Origin enabled.")"
     echo ""
 }
 
@@ -358,7 +347,7 @@ cmd_help() {
     echo "  ublock-chrome install     Download uBlock Origin, create launcher app (default)"
     echo "  ublock-chrome update      Re-download the latest uBlock Origin"
     echo "  ublock-chrome uninstall   Remove uBlock Origin and the launcher app"
-    echo "  ublock-chrome launch      Quit Chrome and relaunch with MV2 flags"
+    echo "  ublock-chrome launch      Quit Chrome and relaunch with uBlock Origin"
     echo "  ublock-chrome help        Show this help message"
     echo ""
 }
