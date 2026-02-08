@@ -98,8 +98,11 @@ download_and_extract() {
     local tmp_zip
     tmp_zip=$(mktemp /tmp/ublock-chrome-XXXXXX.zip)
 
-    # Clean previous extension
-    rm -rf "$EXTENSION_DIR"
+    # Clean previous extension (chmod first — macOS quarantine attrs can block rm)
+    if [[ -d "$EXTENSION_DIR" ]]; then
+        chmod -R u+rwx "$EXTENSION_DIR" 2>/dev/null || true
+        rm -rf "$EXTENSION_DIR"
+    fi
     mkdir -p "$EXTENSION_DIR"
 
     curl -sS -L -o "$tmp_zip" "$DOWNLOAD_URL"
@@ -306,6 +309,7 @@ cmd_uninstall() {
 
     for target in "$INSTALL_DIR" "$APP_DEST"; do
         if [[ -e "$target" ]]; then
+            chmod -R u+rwx "$target" 2>/dev/null || true
             rm -rf "$target"
             echo "  Removed: $target"
         else
