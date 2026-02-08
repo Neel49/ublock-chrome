@@ -96,7 +96,7 @@ fetch_latest_release() {
 
 download_and_extract() {
     local tmp_zip
-    tmp_zip=$(mktemp /tmp/ublock-chrome-XXXXXX.zip)
+    tmp_zip=$(mktemp "${TMPDIR:-/tmp}"/ublock-chrome-XXXXXX)
 
     # Clean previous extension (chmod first — macOS quarantine attrs can block rm)
     if [[ -d "$EXTENSION_DIR" ]]; then
