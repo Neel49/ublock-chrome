@@ -1,8 +1,8 @@
 class UblockChrome < Formula
   desc "One-command uBlock Origin installer for Chrome (macOS)"
   homepage "https://github.com/Neel49/ublock-chrome"
-  url "https://github.com/Neel49/ublock-chrome/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "a56851f766f0fd6165dfd1e40d2049de45cba688f0c8d114ced7b8a78f44a6eb"
+  url "https://github.com/Neel49/ublock-chrome/archive/refs/tags/v1.0.1.tar.gz"
+  sha256 "267be9f11385c52a527f3c12b77287bb72aacddeca257524033949cc4f508e81"
   license "MIT"
 
   depends_on :macos
