@@ -1,0 +1,366 @@
+#!/bin/bash
+# ---------------------------------------------------------------
+# ublock-chrome — One-command uBlock Origin installer for Chrome (macOS)
+#
+# Downloads the latest uBlock Origin, creates a "Chrome (uBO)"
+# launcher app that starts Chrome with MV2 flags + auto-loads
+# the extension. No manual chrome://extensions fiddling needed.
+#
+# Usage:
+#   ublock-chrome install     # full install (default)
+#   ublock-chrome update      # re-download latest uBlock Origin
+#   ublock-chrome uninstall   # remove everything
+#   ublock-chrome launch      # quit Chrome & relaunch with uBO
+# ---------------------------------------------------------------
+
+set -euo pipefail
+
+INSTALL_DIR="$HOME/.ublock-chrome"
+EXTENSION_DIR="$INSTALL_DIR/extension"
+APP_NAME="Chrome (uBO).app"
+APP_DEST="$HOME/Applications/$APP_NAME"
+CHROME_APP="/Applications/Google Chrome.app"
+GITHUB_API="https://api.github.com/repos/gorhill/uBlock/releases/latest"
+MV2_FLAGS="--disable-features=ExtensionManifestV2Unsupported,ExtensionManifestV2Disabled"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_bold()  { printf '\033[1m%s\033[0m' "$*"; }
+_green() { printf '\033[1;32m%s\033[0m' "$*"; }
+_red()   { printf '\033[1;31m%s\033[0m' "$*"; }
+_dim()   { printf '\033[2m%s\033[0m' "$*"; }
+
+_header() {
+    echo ""
+    echo "======================================================"
+    echo "  $1"
+    echo "======================================================"
+    echo ""
+}
+
+_step() {
+    echo "  [$1] $2"
+}
+
+_check_macos() {
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        echo "$(_red "Error:") ublock-chrome is macOS-only." >&2
+        exit 1
+    fi
+}
+
+_check_chrome() {
+    if [[ ! -d "$CHROME_APP" ]]; then
+        echo "$(_red "Error:") Google Chrome not found at $CHROME_APP" >&2
+        echo "Install Chrome first." >&2
+        exit 1
+    fi
+}
+
+_check_deps() {
+    for cmd in curl unzip jq; do
+        if ! command -v "$cmd" &>/dev/null; then
+            echo "$(_red "Error:") Required command '$cmd' not found." >&2
+            if [[ "$cmd" == "jq" ]]; then
+                echo "Install it with: brew install jq" >&2
+            fi
+            exit 1
+        fi
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Core
+# ---------------------------------------------------------------------------
+
+fetch_latest_release() {
+    # Sets DOWNLOAD_URL and RELEASE_TAG
+    local api_response
+    api_response=$(curl -sS -H "User-Agent: ublock-chrome-installer/1.0" "$GITHUB_API")
+
+    RELEASE_TAG=$(echo "$api_response" | jq -r '.tag_name')
+    DOWNLOAD_URL=$(echo "$api_response" | jq -r '
+        .assets[]
+        | select(.name | test("chromium.*\\.zip$"; "i"))
+        | .browser_download_url
+    ')
+
+    if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
+        echo "$(_red "Error:") Could not find Chromium .zip in latest release ($RELEASE_TAG)." >&2
+        echo "Check: https://github.com/gorhill/uBlock/releases" >&2
+        exit 1
+    fi
+}
+
+download_and_extract() {
+    local tmp_zip
+    tmp_zip=$(mktemp /tmp/ublock-chrome-XXXXXX.zip)
+
+    # Clean previous extension
+    rm -rf "$EXTENSION_DIR"
+    mkdir -p "$EXTENSION_DIR"
+
+    curl -sS -L -o "$tmp_zip" "$DOWNLOAD_URL"
+    unzip -qo "$tmp_zip" -d "$EXTENSION_DIR"
+    rm -f "$tmp_zip"
+
+    # If extracted into a single subdirectory, flatten it
+    local subdirs
+    subdirs=("$EXTENSION_DIR"/*/)
+    if [[ ${#subdirs[@]} -eq 1 && -f "${subdirs[0]}manifest.json" ]]; then
+        local subdir="${subdirs[0]}"
+        # Move contents up, then remove empty subdir
+        mv "$subdir"* "$EXTENSION_DIR/" 2>/dev/null || true
+        mv "$subdir".* "$EXTENSION_DIR/" 2>/dev/null || true
+        rmdir "$subdir" 2>/dev/null || true
+    fi
+
+    if [[ ! -f "$EXTENSION_DIR/manifest.json" ]]; then
+        echo "$(_red "Error:") manifest.json not found after extraction." >&2
+        exit 1
+    fi
+
+    # Print extension info
+    local ext_name ext_version
+    ext_name=$(jq -r '.name' "$EXTENSION_DIR/manifest.json")
+    ext_version=$(jq -r '.version' "$EXTENSION_DIR/manifest.json")
+    echo "      $ext_name v$ext_version"
+    echo "      $(_dim "Installed to: $EXTENSION_DIR")"
+}
+
+create_launcher_app() {
+    local app_dir="$INSTALL_DIR/$APP_NAME"
+    local contents="$app_dir/Contents"
+    local macos_dir="$contents/MacOS"
+    local resources="$contents/Resources"
+
+    rm -rf "$app_dir"
+    mkdir -p "$macos_dir" "$resources"
+
+    # ---- Launcher script ----
+    cat > "$macos_dir/launch.sh" << 'LAUNCHER_EOF'
+#!/bin/bash
+CHROME_APP="PLACEHOLDER_CHROME"
+MV2_FLAGS="PLACEHOLDER_FLAGS"
+EXT_PATH="PLACEHOLDER_EXT"
+
+if pgrep -x "Google Chrome" > /dev/null 2>&1; then
+    CHOICE=$(osascript -e '
+        display dialog "Chrome is already running.\n\nFlags are only applied on a fresh launch. Quit Chrome and relaunch with uBlock Origin?" \
+            buttons {"Cancel", "Quit Chrome & Relaunch"} \
+            default button "Quit Chrome & Relaunch" \
+            with title "Chrome (uBO)" \
+            with icon caution' -e 'button returned of result' 2>/dev/null)
+
+    if [[ "$CHOICE" != "Quit Chrome & Relaunch" ]]; then
+        exit 0
+    fi
+
+    osascript -e 'tell application "Google Chrome" to quit' 2>/dev/null
+
+    for i in $(seq 1 30); do
+        pgrep -x "Google Chrome" > /dev/null 2>&1 || break
+        sleep 0.5
+    done
+
+    if pgrep -x "Google Chrome" > /dev/null 2>&1; then
+        pkill -9 -x "Google Chrome"
+        sleep 1
+    fi
+fi
+
+open -a "$CHROME_APP" --args $MV2_FLAGS --load-extension="$EXT_PATH"
+LAUNCHER_EOF
+
+    # Fill in placeholders
+    sed -i '' "s|PLACEHOLDER_CHROME|$CHROME_APP|g" "$macos_dir/launch.sh"
+    sed -i '' "s|PLACEHOLDER_FLAGS|$MV2_FLAGS|g" "$macos_dir/launch.sh"
+    sed -i '' "s|PLACEHOLDER_EXT|$EXTENSION_DIR|g" "$macos_dir/launch.sh"
+    chmod +x "$macos_dir/launch.sh"
+
+    # ---- Info.plist ----
+    cat > "$contents/Info.plist" << 'PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>      <string>launch.sh</string>
+    <key>CFBundleIdentifier</key>      <string>com.ublock-chrome.launcher</string>
+    <key>CFBundleName</key>            <string>Chrome (uBO)</string>
+    <key>CFBundleDisplayName</key>     <string>Chrome (uBO)</string>
+    <key>CFBundleVersion</key>         <string>1.0</string>
+    <key>CFBundlePackageType</key>     <string>APPL</string>
+    <key>CFBundleIconFile</key>        <string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key>  <string>10.15</string>
+    <key>NSHighResolutionCapable</key> <true/>
+</dict>
+</plist>
+PLIST_EOF
+
+    # ---- Borrow Chrome's icon ----
+    local chrome_icon="$CHROME_APP/Contents/Resources/app.icns"
+    if [[ -f "$chrome_icon" ]]; then
+        cp "$chrome_icon" "$resources/AppIcon.icns"
+    fi
+
+    # ---- Copy to ~/Applications ----
+    mkdir -p "$HOME/Applications"
+    rm -rf "$APP_DEST"
+    cp -R "$app_dir" "$APP_DEST"
+
+    echo "      $(_dim "App saved to: $APP_DEST")"
+}
+
+quit_chrome() {
+    if ! pgrep -x "Google Chrome" > /dev/null 2>&1; then
+        return
+    fi
+
+    echo "  Quitting Chrome..."
+    osascript -e 'tell application "Google Chrome" to quit' 2>/dev/null || true
+
+    for i in $(seq 1 30); do
+        pgrep -x "Google Chrome" > /dev/null 2>&1 || break
+        sleep 0.5
+    done
+
+    if pgrep -x "Google Chrome" > /dev/null 2>&1; then
+        pkill -9 -x "Google Chrome" 2>/dev/null || true
+        sleep 1
+    fi
+    echo "  Chrome stopped."
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+cmd_install() {
+    _check_macos
+    _check_chrome
+    _check_deps
+
+    _header "uBlock Origin → Chrome Installer (macOS)"
+
+    _step 1 "Fetching latest uBlock Origin release from GitHub..."
+    fetch_latest_release
+    echo "      Release: $RELEASE_TAG"
+
+    _step 2 "Downloading & extracting extension..."
+    download_and_extract
+
+    _step 3 "Creating 'Chrome (uBO)' launcher app..."
+    create_launcher_app
+
+    echo ""
+    echo "  --------------------------------------------------"
+    echo "  $(_green "Done!") Here's what to do next:"
+    echo "  --------------------------------------------------"
+    echo ""
+    echo "  1. Quit Chrome completely         (Cmd + Q)"
+    echo "  2. Open 'Chrome (uBO)' from:      ~/Applications/"
+    echo "     Or run:  ublock-chrome launch"
+    echo ""
+    echo "  Tip: Right-click the Dock icon → Options → Keep in Dock"
+    echo ""
+    echo "  The launcher automatically:"
+    echo "    • Enables Manifest V2 extensions"
+    echo "    • Loads uBlock Origin into Chrome"
+    echo ""
+    echo "  Other commands:"
+    echo "    ublock-chrome update      Re-download latest uBlock Origin"
+    echo "    ublock-chrome uninstall   Remove everything"
+    echo "    ublock-chrome launch      Quit Chrome & relaunch with uBO"
+    echo ""
+}
+
+cmd_update() {
+    _check_macos
+    _check_chrome
+    _check_deps
+
+    _header "Updating uBlock Origin"
+
+    _step 1 "Fetching latest release..."
+    fetch_latest_release
+    echo "      Release: $RELEASE_TAG"
+
+    _step 2 "Downloading & extracting..."
+    download_and_extract
+
+    _step 3 "Rebuilding launcher app..."
+    create_launcher_app
+
+    echo ""
+    echo "  $(_green "Updated!") Restart Chrome to pick up the new version:"
+    echo "    ublock-chrome launch"
+    echo ""
+}
+
+cmd_uninstall() {
+    _check_macos
+    _header "Uninstalling uBlock Origin Chrome"
+
+    for target in "$INSTALL_DIR" "$APP_DEST"; do
+        if [[ -e "$target" ]]; then
+            rm -rf "$target"
+            echo "  Removed: $target"
+        else
+            echo "  $(_dim "(not found: $target)")"
+        fi
+    done
+
+    echo ""
+    echo "  $(_green "Done.") uBlock Origin and the launcher have been removed."
+    echo "  To remove the CLI itself: brew uninstall ublock-chrome"
+    echo ""
+}
+
+cmd_launch() {
+    _check_macos
+    _check_chrome
+
+    if [[ ! -f "$EXTENSION_DIR/manifest.json" ]]; then
+        echo "$(_red "Error:") uBlock Origin is not installed yet." >&2
+        echo "Run:  ublock-chrome install" >&2
+        exit 1
+    fi
+
+    echo "  Restarting Chrome with uBlock Origin..."
+    quit_chrome
+    open -a "$CHROME_APP" --args $MV2_FLAGS --load-extension="$EXTENSION_DIR"
+    echo "  $(_green "Chrome launched with uBlock Origin enabled.")"
+    echo ""
+}
+
+cmd_help() {
+    echo "ublock-chrome — One-command uBlock Origin installer for Chrome (macOS)"
+    echo ""
+    echo "Usage:"
+    echo "  ublock-chrome install     Download uBlock Origin, create launcher app (default)"
+    echo "  ublock-chrome update      Re-download the latest uBlock Origin"
+    echo "  ublock-chrome uninstall   Remove uBlock Origin and the launcher app"
+    echo "  ublock-chrome launch      Quit Chrome and relaunch with uBlock Origin"
+    echo "  ublock-chrome help        Show this help message"
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+case "${1:-install}" in
+    install)    cmd_install ;;
+    update)     cmd_update ;;
+    uninstall)  cmd_uninstall ;;
+    launch)     cmd_launch ;;
+    help|--help|-h) cmd_help ;;
+    *)
+        echo "Unknown command: $1" >&2
+        echo "Run 'ublock-chrome help' for usage." >&2
+        exit 1
+        ;;
+esac
